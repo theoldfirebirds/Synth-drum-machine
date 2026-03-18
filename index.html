@@ -3,7 +3,6 @@
   <head>
     <meta charset='utf-8'>
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
-    <!-- Note: These local paths assume the files are in the same directory as this HTML -->
     <script src="Cardboard%20Online%20Synth_files/gsn_lib_packed.js"></script>
     <script src="Cardboard%20Online%20Synth_files/gsn_graphdata_CardboardSynth.js"></script>
 
@@ -122,6 +121,7 @@
         border: 1px solid #333;
         user-select: none;
         box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        overflow-x: auto;
       }
 
       #pattern-tabs-container {
@@ -135,6 +135,7 @@
 
       #grid-scroll-area {
         overflow-y: auto;
+        overflow-x: auto;
         max-height: 350px;
         border: 1px solid #333;
         background: #050505;
@@ -144,14 +145,14 @@
         scrollbar-color: #00d2ff #111;
       }
      
-      #grid-scroll-area::-webkit-scrollbar { width: 8px; }
+      #grid-scroll-area::-webkit-scrollbar { width: 8px; height: 8px; }
       #grid-scroll-area::-webkit-scrollbar-track { background: #111; }
       #grid-scroll-area::-webkit-scrollbar-thumb { background-color: #00d2ff; border-radius: 4px; }
 
       .seq-grid {
         display: grid;
-        grid-template-columns: 60px repeat(16, 1fr);
         position: relative;
+        min-width: max-content;
       }
 
       .note-label {
@@ -222,10 +223,10 @@
 
       .drum-row {
         display: grid;
-        grid-template-columns: 120px repeat(16, 1fr) 100px;
         gap: 4px;
         margin-bottom: 4px;
         align-items: center;
+        min-width: max-content;
       }
       .drum-label-container {
         display: flex;
@@ -390,6 +391,7 @@
       var drumSequence = {};
 
       function initPatternSystem() {
+        initSequencerEvents(); 
         addPattern();
         updatePatternTabs();
        
@@ -404,6 +406,7 @@
         const newPattern = {
           id: Date.now(),
           name: "Pattern " + (patterns.length + 1),
+          length: 16,
           sequence: {},
           drumSequence: {}
         };
@@ -420,6 +423,7 @@
         const newPattern = {
           id: Date.now(),
           name: "Pattern " + (patterns.length + 1),
+          length: currentP.length || 16,
           // Deep copy sequences to ensure they are independent
           sequence: JSON.parse(JSON.stringify(currentP.sequence)),
           drumSequence: JSON.parse(JSON.stringify(currentP.drumSequence))
@@ -432,8 +436,18 @@
       function switchToPattern(index) {
         if (index < 0 || index >= patterns.length) return;
         activePatternIndex = index;
-        sequence = patterns[activePatternIndex].sequence;
-        drumSequence = patterns[activePatternIndex].drumSequence;
+        const currentP = patterns[activePatternIndex];
+        sequence = currentP.sequence;
+        drumSequence = currentP.drumSequence;
+        const len = currentP.length || 16;
+        
+        $('#pattern-size').val(len);
+
+        const currentRenderedLength = $('.drum-row[data-track="kick"] .drum-pad').length;
+        if (currentRenderedLength !== len || currentRenderedLength === 0) {
+            renderGrids(len);
+        }
+
         refreshSequencerUI();
         updatePatternTabs();
       }
@@ -446,6 +460,30 @@
         patterns.splice(activePatternIndex, 1);
         activePatternIndex = Math.max(0, activePatternIndex - 1);
         switchToPattern(activePatternIndex);
+      }
+      
+      function changePatternSize(newSize) {
+        newSize = parseInt(newSize);
+        if (isNaN(newSize) || newSize < 1) return;
+        const pattern = patterns[activePatternIndex];
+        const oldSize = pattern.length;
+        if (oldSize === newSize) return;
+       
+        pattern.length = newSize;
+
+        // Adjust drum sequence arrays
+        drumTracks.forEach(track => {
+            const arr = pattern.drumSequence[track.id];
+            if (newSize > arr.length) {
+                pattern.drumSequence[track.id] = arr.concat(new Array(newSize - arr.length).fill(false));
+            } else if (newSize < arr.length) {
+                pattern.drumSequence[track.id] = arr.slice(0, newSize);
+            }
+        });
+
+        // Re-render grids
+        renderGrids(newSize);
+        refreshSequencerUI();
       }
 
       function updatePatternTabs() {
@@ -600,6 +638,20 @@
           try {
             const project = JSON.parse(e.target.result);
             patterns = project.patterns;
+            
+            // Backwards compatibility loop for previous saves
+            patterns.forEach(p => {
+                if (!p.length) p.length = 16;
+                drumTracks.forEach(t => {
+                    if (!p.drumSequence[t.id]) p.drumSequence[t.id] = new Array(p.length).fill(false);
+                    else if (p.drumSequence[t.id].length !== p.length) {
+                        const arr = p.drumSequence[t.id];
+                        if (p.length > arr.length) p.drumSequence[t.id] = arr.concat(new Array(p.length - arr.length).fill(false));
+                        else p.drumSequence[t.id] = arr.slice(0, p.length);
+                    }
+                });
+            });
+
             bpm = project.bpm || 120;
             $('.bpm-input').val(bpm);
             presetSelected = project.presetSelected || 0;
@@ -642,14 +694,14 @@
       var drumRecordingBus = null;
 
       const drumTracks = [
-        { id: 'crash', name: 'crash', samples: ['Samples/18-inch-2.mp3','Samples/18_inch_crash.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Crashes/276[kb]crash-choke-soft-2.wav.mp3']},
-        { id: 'hightom', name: 'high tom', samples: ['Samples/giant_floor_tom.mp3','https://tonejs.github.io/audio/drum-samples/808/tom3.mp3','https://tonejs.github.io/audio/drum-samples/kit1/tom3.mp3']},
-        { id: 'mediumtom', name: 'medium tom', samples: ['Samples/Fx1-Eff1.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Toms/270[kb]tom-tom-spring-verb-lo.wav.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Toms/90[kb]medetom.wav.mp3']},
-        { id: 'lowtom', name: 'low tom', samples: ['Samples/K3-Perc1.mp3','Samples/K3-Perc1.mp3','https://tonejs.github.io/audio/drum-samples/kit1/tom1.mp3']},
-        { id: 'openhat', name: 'open hihat', samples: ['Samples/hard_openhat.mp3','Samples/bigopenhh.mp3','https://cdn.freecodecamp.org/testable-projects-fcc/audio/Dsc_Oh.mp3']},
-        { id: 'closedhat', name: 'closed hihat', samples: ['Samples/K4-ClosedHat.mp3','Samples/hat007.mp3','https://cdn.freecodecamp.org/testable-projects-fcc/audio/Cev_H2.mp3']},
-        { id: 'snare', name: 'snare', samples: ['Samples/acoustic_snare.mp3','Samples/K4-Snare.mp3','https://tonejs.github.io/audio/drum-samples/CR78/snare.mp3']},
-        { id: 'kick', name: 'kick', samples: ['Samples/K4-Kick.mp3','Samples/K3-Kick.mp3','https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3']},
+        { id: 'crash', name: 'crash', samples: ['samples/18-inch-2.mp3','samples/18_inch_crash.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Crashes/276[kb]crash-choke-soft-2.wav.mp3']},
+        { id: 'hightom', name: 'high tom', samples: ['samples/giant_floor_tom.mp3','https://tonejs.github.io/audio/drum-samples/808/tom3.mp3','https://tonejs.github.io/audio/drum-samples/kit1/tom3.mp3']},
+        { id: 'mediumtom', name: 'medium tom', samples: ['samples/Fx1-Eff1.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Toms/270[kb]tom-tom-spring-verb-lo.wav.mp3','https://sampleswap.org/samples-ghost/DRUMS%20(SINGLE%20HITS)/Toms/90[kb]medetom.wav.mp3']},
+        { id: 'lowtom', name: 'low tom', samples: ['samples/K3-Perc1.mp3','samples/K3-Perc1.mp3','https://tonejs.github.io/audio/drum-samples/kit1/tom1.mp3']},
+        { id: 'openhat', name: 'open hihat', samples: ['samples/hard_openhat.mp3','samples/bigopenhh.mp3','https://cdn.freecodecamp.org/testable-projects-fcc/audio/Dsc_Oh.mp3']},
+        { id: 'closedhat', name: 'closed hihat', samples: ['samples/K4-ClosedHat.mp3','samples/hat007.mp3','https://cdn.freecodecamp.org/testable-projects-fcc/audio/Cev_H2.mp3']},
+        { id: 'snare', name: 'snare', samples: ['samples/acoustic_snare.mp3','samples/K4-Snare.mp3','https://tonejs.github.io/audio/drum-samples/CR78/snare.mp3']},
+        { id: 'kick', name: 'kick', samples: ['samples/K4-Kick.mp3','samples/K3-Kick.mp3','https://tonejs.github.io/audio/drum-samples/CR78/kick.mp3']},
       ];
 
       async function initDrumAudio() {
@@ -835,24 +887,56 @@
       }
 
       function clearDrums() {
+        const len = patterns[activePatternIndex].length || 16;
         drumTracks.forEach(track => {
           drumSequence[track.id].fill(false);
         });
         $('.drum-pad').removeClass('active');
       }
 
-      function renderDrumKit() {
+      function renderGrids(length) {
+        length = length || 16;
+        
+        // Save user's current drum settings so they are not wiped on re-render
+        let drumStates = {};
+        drumTracks.forEach(track => {
+            let $sel = $(`.drum-row[data-track="${track.id}"] .drum-select`);
+            let $vol = $(`#vol-${track.id}`);
+            let $pitch = $(`#pitch-${track.id}`);
+            if ($sel.length) {
+                drumStates[track.id] = {
+                    sample: $sel.val(),
+                    vol: $vol.val(),
+                    pitch: $pitch.val()
+                };
+            }
+        });
+
+        // 1. Synth Grid
+        const $grid = $('#seq-grid');
+        $grid.empty().append('<div class="playhead"></div>');
+        $grid.css('grid-template-columns', `60px repeat(${length}, 1fr)`);
+
+        gridNotes.forEach(n => {
+            $grid.append(`<div class="note-label ${n.name.includes('#') ? 'black-key' : ''}">${n.name}</div>`);
+            for (let step = 0; step < length; step++) {
+                $grid.append(`<div class="cell" data-note="${n.midi}" data-step="${step}"></div>`);
+            }
+        });
+
+        // 2. Drum Kit
         const $container = $('#drum-kit-rows');
         $container.empty();
-        let headerHtml = `<div class="drum-row" style="margin-bottom: 2px; height: 15px;">
-          <div style="grid-column: 1 / 18;"></div>
+        let headerHtml = `<div class="drum-row" style="margin-bottom: 2px; height: 15px; grid-template-columns: 120px repeat(${length}, 1fr) 100px;">
+          <div style="grid-column: 1 / ${length + 2};"></div>
           <div style="display: flex; gap: 5px; font-size: 10px; color: #666; justify-content: center; font-weight: bold;">
             <div style="width: 45px;">VOLUME</div><div style="width: 45px;">PITCH</div>
           </div>
         </div>`;
         $container.append(headerHtml);
+
         drumTracks.forEach(track => {
-          let html = `<div class="drum-row" data-track="${track.id}">
+          let html = `<div class="drum-row" data-track="${track.id}" style="grid-template-columns: 120px repeat(${length}, 1fr) 100px;">
             <div class="drum-label-container">
               <select class="drum-select" onchange="loadDrumBuffer('${track.id}', this.value)">
                 <option value="0">${track.name} 1</option>
@@ -860,14 +944,32 @@
                 <option value="2">${track.name} 3</option>
               </select>
             </div>`;
-          for(let i=0; i<16; i++) html += `<div class="drum-pad" data-step="${i}" onclick="toggleDrumPad('${track.id}', ${i}, this)"></div>`;
+          for(let i=0; i<length; i++) html += `<div class="drum-pad" data-step="${i}" onclick="toggleDrumPad('${track.id}', ${i}, this)"></div>`;
           html += `<div class="drum-controls-right"><input type="range" class="drum-slider" id="vol-${track.id}" value="80" min="0" max="100"><input type="range" class="drum-slider" id="pitch-${track.id}" value="50" min="10" max="100"></div></div>`;
           $container.append(html);
         });
-        let footerHtml = `<div class="drum-row" style="margin-top: 8px;"><div style="display: flex; gap: 2px;"><button id="drum-record-btn" class="button buttonred" style="padding: 2px 5px; font-size: 10px; margin: 0; width: 60px;" onclick="toggleDrumRecord()">Record Drums</button></div>`;
-        for(let i=1; i<=16; i++) footerHtml += `<div class="drum-step-number" data-step="${i-1}">${i}</div>`;
+
+        let footerHtml = `<div class="drum-row" style="margin-top: 8px; grid-template-columns: 120px repeat(${length}, 1fr) 100px;"><div style="display: flex; gap: 2px;"><button id="drum-record-btn" class="button buttonred" style="padding: 2px 5px; font-size: 10px; margin: 0; width: 60px;" onclick="toggleDrumRecord()">Record Drums</button></div>`;
+        for(let i=1; i<=length; i++) footerHtml += `<div class="drum-step-number" data-step="${i-1}">${i}</div>`;
         footerHtml += `<div style="display: flex; justify-content: center;"><button class="button button-clear-drum" style="padding: 2px 10px; font-size: 11px; margin: 0;" onclick="clearDrums()">Clear</button></div></div>`;
         $container.append(footerHtml);
+
+        // Preserve drum recording UI state if recording 
+        if (isDrumRecording) {
+            $('#drum-record-btn').text('Stop Rec').css('background-color', '#ffeb3b').css('color', '#000');
+        }
+
+        // Restore drum states
+        if (Object.keys(drumStates).length > 0) {
+            drumTracks.forEach(track => {
+                let state = drumStates[track.id];
+                if (state) {
+                    $(`.drum-row[data-track="${track.id}"] .drum-select`).val(state.sample);
+                    $(`#vol-${track.id}`).val(state.vol);
+                    $(`#pitch-${track.id}`).val(state.pitch);
+                }
+            });
+        }
       }
 
       function toggleDrumPad(trackId, step, el) {
@@ -978,11 +1080,11 @@
         instance_CardboardSynth.nodeMgrInterface.loadFromString(gsn_data.graph_CardboardSynth, false);
         instance_CardboardSynth.ui.update();
         instance_CardboardSynth.drawUIBorder = false;
-        $("#cardboard").css('background-image', 'url(./cardboard_backgroundX.jpg)');
+        $("#cardboard").css('background-image', 'url(./cardboard_backgroundX2.jpg)');
         nodes = [];
         for(var i = 0; i < nodeNames.length; i++) nodes.push(parseInt(instance_CardboardSynth.runMgr.getNodeIdByName(nodeNames[i])));
-        presetNames = ["Wild Squelchy Bass", "Lollygag", "Sine", "Kick Drum", "Good Morning Brass", "Sad Pad", "Reverb Strings", "Castanets", "Wind", "Snare Drum", "Violine", "Saw 5ths", "Hello Bass", "SciFi Rumble", "Wobbly Flute", "Bulan Atmosphere", "Bright E-Piano", "Seb", "Diana Bass", "Marimba", "Sober Bass"];
-        presets = [[false,1,0,2,0.25,0,4750,false,2,1,2,0.25,0,false,1,0.27,2,false,3,1740,true,false,0,45,7.72,0,450,1,4950,0.68,13,39,0.35,45,0.13,0.0008,91,0,36,0,100,0,47,true,false,0,20,1,true,0.21,0.31,0.21,false,4.27,0.50,0.23,2176,0.25,false],[false,2,1,0,0.25,0,4750,false,2,3,0,0.25,0,true,1,0.72,1,false,0,1320,false,false,0,40,6.53,0,90,1,1650,0.68,13,39,0.35,45,0.13,0.0008,50,0,36,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,0.53,false],[false,0,2,0,0.25,0,4750,true,2,3,0,0.25,0,true,1,0.72,1,true,0,1320,false,true,0,40,6.53,0,90,1,1650,0.68,12,30,1,33,0,0.0008,50,0,36,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,0.53,false],[false,0,0,0,0.25,1,1750,true,0,0,1,0.25,2,true,1,0.05,0,true,0,1320,false,true,0,49,0.2,0,0,1,0,1,0,48,0,0,0,0.0008,60,0,0,0,41,0,0,true,false,0,20,1,true,0.6,0.36,0.14,true,2.24,0.46,0.11,332,0.68,true],[false,2,3,0,0.25,0,4750,false,2,2,2,0.1,-12,true,1,0.72,1,false,0,540,false,false,0,55,2.77,0,110,1,500,0.58,9,30,0.39,30,0.11,0.0008,77,0,36,4,74,0.58,47,false,false,0,2,0.25,true,0.66,0.54,0.14,true,3.85,0.45,0.16,1890,1,false],[false,2,2,1,0.25,0,4750,false,1,1,0,0.14,2,false,2,0.02,1,false,0,1200,false,false,0,40,5.94,0,0,2,1250,0.65,53,18,1,51,0.06,0.0008,100,0.37,60,100,17,1,0,true,true,0,2.8,0.64,true,0.21,0.31,0.14,false,4.62,0.51,0.25,1244,0.26,false],[false,2,3,0,0.25,0,2300,false,2,3,0,0.08,-8,true,1,0.04,1,false,0,1680,true,false,4,56,5.54,-8.4,180,2,1800,0.68,48,37,1,53,0,0.0008,50,0.43,37,63,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,false,4.9,0.63,0.24,2118,0.53,false],[true,0,1,0,0.04,0,2900,true,0,1,0,0.03,-100,false,1,1,1,true,0,1320,false,false,1,53,16.63,-3.2,0,1,250,0.4,0,48,0,0,0,0.0008,60,0,0,12,57,0,0,true,true,3,5.4,1,true,0.21,0.09,0.03,true,5.39,0.36,0.16,978,0.48,true],[true,2,3,1,0.12,0,2300,true,0,3,0,0.25,0,false,1,1,0,true,0,1560,true,false,0,31,1.78,0,880,2,3050,0.68,54,78,0.46,53,0.54,0.0008,50,0.43,37,93,100,0.42,81,true,true,0,2.4,0.48,true,0.64,0.59,0.13,true,4.06,0.53,0.16,1244,1,false],[false,0,1,0,0.04,0,2900,false,0,1,0,0.03,-100,false,1,1,1,true,0,1320,false,false,1,31,10.2,0,0,1,300,1,0,48,0,0,0,0.0008,60,0,0,12,57,0,0,true,false,3,5.4,1,true,0.21,0.09,0.03,true,5.39,0.36,0.16,978,1,true],[false,2,3,1,0.12,0,2300,false,0,3,0,0.25,0,true,1,0.04,1,false,0,1680,true,false,0,74,1.78,0,250,0,1650,0.68,43,32,1,53,0,0.0008,50,0.43,37,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,4.06,0.53,0.16,1244,0.53,false],[false,2,1,0,0.17,5,1900,false,2,2,0,0.25,0,false,1,0.08,1,false,0,-720,false,false,2,29,0.2,1.2,120,2,4400,1,61,87,0.86,33,0,0.0008,100,0.44,36,100,100,0.41,47,true,true,0,2.4,0.48,false,0.24,0.31,0.06,false,5.46,0.62,0.19,200,0.62,false],[false,0,1,0,0.25,0,4750,false,2,0,0,0.25,0,true,1,0.72,1,false,0,-2220,false,false,0,47,6.53,0,220,1,1550,0.73,12,30,1,33,0,0.0008,50,0,36,100,100,0,47,true,true,0,5.2,0.12,true,0.66,0.54,0.14,true,3.43,0.44,0.25,1244,0.77,false],[false,2,2,0,0.25,0,4750,false,2,2,0,0.25,-28,true,1,0.19,1,false,0,1320,false,false,0,20,10.1,0.8,90,2,3500,0.65,20,39,0.35,45,0.13,0.0008,50,0,36,100,100,0,47,true,false,1,4.8,0.53,false,0.31,0.56,0.14,false,3.43,0.63,0.28,1206,0.53,false],[false,3,1,1,0.14,0,4750,false,1,3,2,0.25,22,false,2,0.05,2,false,1,480,true,false,3,65,8.91,-12,540,3,3800,0.14,10,77,0.54,45,0.6,0.0008,50,0.4,36,0,60,0.34,44,false,false,1,1.8,0.44,true,0.31,0.70,0.14,true,3.43,0.44,0.25,2308,0.28,false],[false,0,1,0,0.25,0,1050,false,2,0,1,0.25,0,true,1,0.59,1,false,0,-2220,false,false,0,26,6.53,0,350,2,3714,0,12,2.37,1,33,0.08,0.0008,50,0.69,36,77,100,0,44.8,true,false,0,3.03,0.38,true,0.66,0.54,0.14,true,3.43,0.12,0.25,1244,0.42,false],[false,2,3,0,0.25,0,4750,false,2,3,0,0.25,0,true,1,0.72,1,false,0,-1020,false,false,0,40,5.64,0,0,4,2191,0.72,4.24,39,0.35,45,0.08,0.0008,50,0,36,100,0,0,0,true,true,1,5.6,0.50,true,0.21,0.31,0.38,true,4.66,0.44,0.25,1244,1,false],[false,2,2,1,0.25,4,3200,true,2,1,2,0.25,0,true,1,0.27,2,false,3,-60,false,true,0,100,15.0,-10,320,4,4950,0.68,0,38,0.5,51,0.47,12.00,10,0.41,26,64,40,0.16,31,false,true,0,20,1,true,0.21,0.31,0.21,true,4.27,0.50,0.23,2176,1,false],[false,2,0,0,0.12,1,1200,false,2,0,0,0.12,10,true,1,0.27,2,true,3,-1620,true,false,0,41,10.2,0,60,2,850,1,5,57,0.11,43,0.13,0.0008,20,0,27,0,38,0,28,false,false,0,8.6,0.43,true,0.21,0.31,0.21,true,4.27,0.50,0.23,2176,0.62,false],[false,0,1,0,0.24,0,4750,false,2,3,0,0.15,0,true,1,0.55,1,false,0,1320,false,false,0,40,6.53,14.8,90,1,1650,0.91,13,39,0.35,45,0.13,0.0008,50,0,15.9,100,5.64,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,2761,1.0,false],[false,2,0,0,0.25,0,4750,true,2,3,0,0.25,0,true,2,0.72,1,true,0,1320,true,false,0,40,6.53,0,90,1,1650,1,0,39,0.35,45,0.13,0.10,36,0.16,35,40,42,0.25,47,false,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,1,false]];
+        presetNames = ["Wild Squelchy Bass", "Lollygag", "Sine", "Kick Drum", "Good Morning Brass", "Sad Pad", "Reverb Strings", "Castanets", "Wind", "Snare Drum", "Violine", "Saw 5ths", "Hello Bass", "SciFi Rumble", "Wobbly Flute", "Bulan Atmosphere", "Bright E-Piano", "Seb", "Diana Bass", "Marimba", "Sober Bass", "BassX", "Gothic"];
+        presets = [[false,1,0,2,0.25,0,4750,false,2,1,2,0.25,0,false,1,0.27,2,false,3,1740,true,false,0,45,7.72,0,450,1,4950,0.68,13,39,0.35,45,0.13,0.0008,91,0,36,0,100,0,47,true,false,0,20,1,true,0.21,0.31,0.21,false,4.27,0.50,0.23,2176,0.25,false],[false,2,1,0,0.25,0,4750,false,2,3,0,0.25,0,true,1,0.72,1,false,0,1320,false,false,0,40,6.53,0,90,1,1650,0.68,13,39,0.35,45,0.13,0.0008,50,0,36,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,0.53,false],[false,0,2,0,0.25,0,4750,true,2,3,0,0.25,0,true,1,0.72,1,true,0,1320,false,true,0,40,6.53,0,90,1,1650,0.68,12,30,1,33,0,0.0008,50,0,36,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,0.53,false],[false,0,0,0,0.25,1,1750,true,0,0,1,0.25,2,true,1,0.05,0,true,0,1320,false,true,0,49,0.2,0,0,1,0,1,0,48,0,0,0,0.0008,60,0,0,0,41,0,0,true,false,0,20,1,true,0.6,0.36,0.14,true,2.24,0.46,0.11,332,0.68,true],[false,2,3,0,0.25,0,4750,false,2,2,2,0.1,-12,true,1,0.72,1,false,0,540,false,false,0,55,2.77,0,110,1,500,0.58,9,30,0.39,30,0.11,0.0008,77,0,36,4,74,0.58,47,false,false,0,2,0.25,true,0.66,0.54,0.14,true,3.85,0.45,0.16,1890,1,false],[false,2,2,1,0.25,0,4750,false,1,1,0,0.14,2,false,2,0.02,1,false,0,1200,false,false,0,40,5.94,0,0,2,1250,0.65,53,18,1,51,0.06,0.0008,100,0.37,60,100,17,1,0,true,true,0,2.8,0.64,true,0.21,0.31,0.14,false,4.62,0.51,0.25,1244,0.26,false],[false,2,3,0,0.25,0,2300,false,2,3,0,0.08,-8,true,1,0.04,1,false,0,1680,true,false,4,56,5.54,-8.4,180,2,1800,0.68,48,37,1,53,0,0.0008,50,0.43,37,63,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,false,4.9,0.63,0.24,2118,0.53,false],[true,0,1,0,0.04,0,2900,true,0,1,0,0.03,-100,false,1,1,1,true,0,1320,false,false,1,53,16.63,-3.2,0,1,250,0.4,0,48,0,0,0,0.0008,60,0,0,12,57,0,0,true,true,3,5.4,1,true,0.21,0.09,0.03,true,5.39,0.36,0.16,978,0.48,true],[true,2,3,1,0.12,0,2300,true,0,3,0,0.25,0,false,1,1,0,true,0,1560,true,false,0,31,1.78,0,880,2,3050,0.68,54,78,0.46,53,0.54,0.0008,50,0.43,37,93,100,0.42,81,true,true,0,2.4,0.48,true,0.64,0.59,0.13,true,4.06,0.53,0.16,1244,1,false],[false,0,1,0,0.04,0,2900,false,0,1,0,0.03,-100,false,1,1,1,true,0,1320,false,false,1,31,10.2,0,0,1,300,1,0,48,0,0,0,0.0008,60,0,0,12,57,0,0,true,false,3,5.4,1,true,0.21,0.09,0.03,true,5.39,0.36,0.16,978,1,true],[false,2,3,1,0.12,0,2300,false,0,3,0,0.25,0,true,1,0.04,1,false,0,1680,true,false,0,74,1.78,0,250,0,1650,0.68,43,32,1,53,0,0.0008,50,0.43,37,100,100,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,4.06,0.53,0.16,1244,0.53,false],[false,2,1,0,0.17,5,1900,false,2,2,0,0.25,0,false,1,0.08,1,false,0,-720,false,false,2,29,0.2,1.2,120,2,4400,1,61,87,0.86,33,0,0.0008,100,0.44,36,100,100,0.41,47,true,true,0,2.4,0.48,false,0.24,0.31,0.06,false,5.46,0.62,0.19,200,0.62,false],[false,0,1,0,0.25,0,4750,false,2,0,0,0.25,0,true,1,0.72,1,false,0,-2220,false,false,0,47,6.53,0,220,1,1550,0.73,12,30,1,33,0,0.0008,50,0,36,100,100,0,47,true,true,0,5.2,0.12,true,0.66,0.54,0.14,true,3.43,0.44,0.25,1244,0.77,false],[false,2,2,0,0.25,0,4750,false,2,2,0,0.25,-28,true,1,0.19,1,false,0,1320,false,false,0,20,10.1,0.8,90,2,3500,0.65,20,39,0.35,45,0.13,0.0008,50,0,36,100,100,0,47,true,false,1,4.8,0.53,false,0.31,0.56,0.14,false,3.43,0.63,0.28,1206,0.53,false],[false,3,1,1,0.14,0,4750,false,1,3,2,0.25,22,false,2,0.05,2,false,1,480,true,false,3,65,8.91,-12,540,3,3800,0.14,10,77,0.54,45,0.6,0.0008,50,0.4,36,0,60,0.34,44,false,false,1,1.8,0.44,true,0.31,0.70,0.14,true,3.43,0.44,0.25,2308,0.28,false],[false,0,1,0,0.25,0,1050,false,2,0,1,0.25,0,true,1,0.59,1,false,0,-2220,false,false,0,26,6.53,0,350,2,3714,0,12,2.37,1,33,0.08,0.0008,50,0.69,36,77,100,0,44.8,true,false,0,3.03,0.38,true,0.66,0.54,0.14,true,3.43,0.12,0.25,1244,0.42,false],[false,2,3,0,0.25,0,4750,false,2,3,0,0.25,0,true,1,0.72,1,false,0,-1020,false,false,0,40,5.64,0,0,4,2191,0.72,4.24,39,0.35,45,0.08,0.0008,50,0,36,100,0,0,0,true,true,1,5.6,0.50,true,0.21,0.31,0.38,true,4.66,0.44,0.25,1244,1,false],[false,2,2,1,0.25,4,3200,true,2,1,2,0.25,0,true,1,0.27,2,false,3,-60,false,true,0,100,15.0,-10,320,4,4950,0.68,0,38,0.5,51,0.47,12.00,10,0.41,26,64,40,0.16,31,false,true,0,20,1,true,0.21,0.31,0.21,true,4.27,0.50,0.23,2176,1,false],[false,2,0,0,0.12,1,1200,false,2,0,0,0.12,10,true,1,0.27,2,true,3,-1620,true,false,0,41,10.2,0,60,2,850,1,5,57,0.11,43,0.13,0.0008,20,0,27,0,38,0,28,false,false,0,8.6,0.43,true,0.21,0.31,0.21,true,4.27,0.50,0.23,2176,0.62,false],[false,0,1,0,0.24,0,4750,false,2,3,0,0.15,0,true,1,0.55,1,false,0,1320,false,false,0,40,6.53,14.8,90,1,1650,0.91,13,39,0.35,45,0.13,0.0008,50,0,15.9,100,5.64,0,47,true,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,2761,1.0,false],[false,2,0,0,0.25,0,4750,true,2,3,0,0.25,0,true,2,0.72,1,true,0,1320,true,false,0,40,6.53,0,90,1,1650,1,0,39,0.35,45,0.13,0.10,36,0.16,35,40,42,0.25,47,false,true,0,2.4,0.48,true,0.21,0.31,0.14,true,3.43,0.44,0.25,1244,1,false],[false,0,1,0,0.1825,0,4450,false,0,0,0,0.25,2,true,2,1,2,true,0,3000,false,true,0,64,2.569999999999999,7.599999999999998,820,1,1550,0.73,12,30,1,33,0,0.0008,50,0,36,100,100,0,47,true,true,0,5.2,0.12,true,0.66,0.54,0.14,true,3.43,0.44,0.25,1244,0.77,false],[false,0,1,0,0.25,0,4450,false,2,2,0,0.25,10.000000000000014,true,2,0.17766672167177122,2,true,0,3000,false,true,0,6.584380815337331,2.569999999999999,7.599999999999998,820,1,3656.353961104049,0.73,12,30,1,33,51.76174596082384,0.0008,0.9425866732054324,0,36,100,100,0.2982776150475007,44.461999221808505,false,true,1,5.2,0.12,false,0.21000000000000002,0.54,0.14,true,3.43,0.44,168.96345712156642,3152.6080257403505,0.77,false]];
         var select = document.getElementById("sound-select");
         presetNames.forEach((name, idx) => {
           var opt = document.createElement("option"); opt.value = idx; opt.text = idx + ": " + name;
@@ -991,9 +1093,7 @@
         instance_CardboardSynth.runMgr.setUserCallBackFunction(() => recordUpdateDisplay());
         instance_CardboardSynth.runMgr.playGraph();
         setSound();
-        initSequencer();
         initDrumAudio();
-        renderDrumKit();
         initPatternSystem();
         loadStoredCalibration();
       }
@@ -1118,14 +1218,7 @@
         if (drumAudioContext && drumAudioContext.state === 'suspended') drumAudioContext.resume();
       }
 
-      function initSequencer() {
-        const $grid = $('#seq-grid');
-        $grid.empty().append('<div class="playhead"></div>');
-        gridNotes.forEach(n => {
-          $grid.append(`<div class="note-label ${n.name.includes('#') ? 'black-key' : ''}">${n.name}</div>`);
-          for (let step = 0; step < 16; step++) $grid.append(`<div class="cell" data-note="${n.midi}" data-step="${step}"></div>`);
-        });
-       
+      function initSequencerEvents() {
         // Prevent context menu on grid
         $('#seq-grid').on('contextmenu', function(e) {
              e.preventDefault();
@@ -1234,13 +1327,16 @@
 
       function runStep() {
         const timeStep = (60 / bpm / 4);
-        const gridWidth = ($('.seq-grid').width() - 60) / 16;
+        const currentPlayPattern = patterns[playPatternIndex];
+        const patternLength = currentPlayPattern.length || 16;
+        
+        const gridWidth = ($('.seq-grid').width() - 60) / patternLength;
         $('.playhead').css('left', (60 + (currentStep * gridWidth)) + 'px');
         $('.drum-pad').removeClass('current-step');
         $(`.drum-pad[data-step="${currentStep}"]`).addClass('current-step');
         $('.drum-step-number').css('color', '#444');
         $(`.drum-step-number[data-step="${currentStep}"]`).css('color', '#00d2ff');
-        const currentPlayPattern = patterns[playPatternIndex];
+        
         if (currentPlayPattern.sequence[currentStep]) {
           Object.keys(currentPlayPattern.sequence[currentStep]).forEach(midi => {
             const steps = currentPlayPattern.sequence[currentStep][midi], durationSec = timeStep * steps;
@@ -1248,8 +1344,10 @@
           });
         }
         drumTracks.forEach(track => { if (currentPlayPattern.drumSequence[track.id][currentStep]) playDrum(track.id); });
+        
         currentStep++;
-        if (currentStep >= 16) {
+        
+        if (currentStep >= patternLength) {
           currentStep = 0;
           if (!isPatternPlay) {
             // Normal Song Mode: Loop through all patterns
@@ -1260,6 +1358,7 @@
           }
           updatePatternTabs();
         }
+        
         if (isPlaying) {
           const stepMs = timeStep * 1000;
           expectedTime += stepMs;
@@ -1347,6 +1446,12 @@
 
           <div class="myBlock" style="display: block;">
             <div style="font-size: 11px; color: #d900ff; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px; font-family: monospace;">Pattern Control Panel</div>
+            
+            <div style="display: inline-block; margin-right: 15px; margin-bottom: 5px; vertical-align: middle;">
+              <label for="pattern-size" style="font-size: 12px; color: #00d2ff; font-family: monospace; font-weight: bold;">SIZE:</label>
+              <input type="number" id="pattern-size" class="bpm-input" value="16" min="1" max="64" onchange="changePatternSize(this.value)" style="width: 45px;">
+            </div>
+
             <button class="button button-cyber" onclick="addPattern()">Add Pattern</button>
             <button class="button button-cyber" onclick="duplicatePattern()">Duplicate Pattern</button>
             <button class="button button-cyber" onclick="deletePattern()">Delete Pattern</button>
@@ -1389,8 +1494,7 @@
 
         <div id="drum-container">
           <div id="drum-kit-rows">
-            <!-- Populated via JS -->
-          </div>
+            </div>
         </div>
       </div>
     </div>
@@ -1404,3 +1508,4 @@
     </div>
   </body>
 </html>
+
