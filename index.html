@@ -2,6 +2,45 @@
 <html lang='en'>
   <head>
     <meta charset='utf-8'>
+    
+    <!-- WEB MIDI INTERCEPTOR STRATEGY -->
+    <!-- Must run BEFORE the synth engine libraries are loaded -->
+    <script>
+      (function initWebMidiInterceptor() {
+        console.log("Initializing Virtual MIDI Interceptor...");
+        
+        // 1. Create a Virtual MIDI Input object mimicking a real hardware input
+        window.virtualMIDIInput = {
+          id: 'virtual-sequencer-1',
+          name: 'Virtual Sequencer',
+          manufacturer: 'Custom',
+          state: 'connected',
+          connection: 'open',
+          type: 'input',
+          onmidimessage: null,
+          addEventListener: function(type, listener) {
+            if (type === 'midimessage') this.onmidimessage = listener;
+          },
+          removeEventListener: function(type, listener) {
+            if (type === 'midimessage' && this.onmidimessage === listener) this.onmidimessage = null;
+          }
+        };
+
+        // 2. Mock the MIDIAccess object returned by requestMIDIAccess
+        const mockMIDIAccess = {
+          inputs: new Map([['virtual-sequencer-1', window.virtualMIDIInput]]),
+          outputs: new Map(),
+          onstatechange: null,
+          sysexEnabled: false
+        };
+
+        // 3. Override the browser's native requestMIDIAccess API
+        navigator.requestMIDIAccess = function() {
+          return Promise.resolve(mockMIDIAccess);
+        };
+      })();
+    </script>
+
     <script src="https://code.jquery.com/jquery-1.10.2.min.js"></script>
     <script src="Cardboard%20Online%20Synth_files/gsn_lib_packed.js"></script>
     <script src="Cardboard%20Online%20Synth_files/gsn_graphdata_CardboardSynth.js"></script>
@@ -14,6 +53,27 @@
     <style>
       body { background-color: #1a1a1a; color: #ccc; font-family: sans-serif; overflow-x: hidden; margin: 0; }
      
+      /* Click to Start Overlay */
+      #start-overlay {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.95);
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+      }
+      .overlay-title {
+        color: #00d2ff;
+        font-family: monospace;
+        font-size: 32px;
+        text-shadow: 0 0 15px #00d2ff;
+        margin-bottom: 30px;
+        text-align: center;
+      }
+
       /* Main Layout Container */
       #main-app-area {
         display: flex;
@@ -79,11 +139,9 @@
       }
       #recordbutton:hover { background-color: #d32f2f; box-shadow: 0 0 10px rgba(244, 67, 54, 0.8); }
 
-      /* Utility classes for legacy references, mapped to red only where needed */
       .buttonred { background-color: #f44336; color: white; }
       .buttonred:hover { background-color: #d32f2f; }
 
-      /* Override drum clear button to match cyber style exactly */
       .button-clear-drum {
         background-color: #000 !important;
         color: #00d2ff !important;
@@ -140,7 +198,6 @@
         border: 1px solid #333;
         background: #050505;
         position: relative;
-        /* Scrollbar styling for Webkit */
         scrollbar-width: thin;
         scrollbar-color: #00d2ff #111;
       }
@@ -182,7 +239,6 @@
         overflow: visible;
       }
      
-      /* Grid lines slightly visible to match tech style */
       .cell:nth-child(4n) { border-right: 1px solid #333; }
 
       .active-note {
@@ -190,7 +246,6 @@
         top: 2px;
         bottom: 2px;
         left: 2px;
-        /* Fuchsia Style */
         background: #d900ff;
         border: 1px solid #ff80ff;
         border-radius: 2px;
@@ -270,22 +325,6 @@
         accent-color: #00d2ff;
       }
 
-      #calibration-banner {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        background: #000;
-        color: #00d2ff;
-        border-bottom: 1px solid #00d2ff;
-        padding: 15px;
-        z-index: 10002;
-        text-align: center;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-        font-weight: bold;
-      }
-
       .pattern-tabs-wrapper {
         display: flex;
         flex-wrap: wrap;
@@ -355,6 +394,22 @@
     </style>
 
     <script>
+      // --- APP START OVERLAY LOGIC ---
+      function startApp() {
+        // Fade out overlay
+        $('#start-overlay').fadeOut(300);
+        
+        // Ensure AudioContext is primed via user gesture before engine init
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+           const tempCtx = new AudioContext();
+           tempCtx.resume().then(() => console.log('Audio Context successfully primed.'));
+        }
+        
+        // Initialize Synth
+        gsn_load();
+      }
+
       // --- CONFIG & PARAMETERS ---
       var nodeNames = ["Osc1Mute","Osc1Type","Osc1Oct","Osc1Env","Osc1Gain","Osc1PitchEnv","Osc1PitchAmp",
         "Osc2Mute","Osc2Type","Osc2Oct","Osc2Env","Osc2Gain", "Osc2Detune",
@@ -383,9 +438,8 @@
       var activePatternIndex = 0;
       var playPatternIndex = 0;
      
-      // Dragging State
       var draggingPatternIdx = null;
-      var draggingNote = null; // { step, note, duration, originalStep, originalNote }
+      var draggingNote = null; 
 
       var sequence = {};
       var drumSequence = {};
@@ -394,8 +448,6 @@
         initSequencerEvents(); 
         addPattern();
         updatePatternTabs();
-       
-        // Prevent context menu on tabs container for Right-Click logic
         $('#pattern-tabs').on('contextmenu', function(e) {
              e.preventDefault();
              return false;
@@ -424,7 +476,6 @@
           id: Date.now(),
           name: "Pattern " + (patterns.length + 1),
           length: currentP.length || 16,
-          // Deep copy sequences to ensure they are independent
           sequence: JSON.parse(JSON.stringify(currentP.sequence)),
           drumSequence: JSON.parse(JSON.stringify(currentP.drumSequence))
         };
@@ -470,8 +521,6 @@
         if (oldSize === newSize) return;
        
         pattern.length = newSize;
-
-        // Adjust drum sequence arrays
         drumTracks.forEach(track => {
             const arr = pattern.drumSequence[track.id];
             if (newSize > arr.length) {
@@ -480,8 +529,6 @@
                 pattern.drumSequence[track.id] = arr.slice(0, newSize);
             }
         });
-
-        // Re-render grids
         renderGrids(newSize);
         refreshSequencerUI();
       }
@@ -494,12 +541,10 @@
             const isPlayingPattern = (i === playPatternIndex && isPlaying) ? 'playing' : '';
             const $tab = $(`<div class="pattern-tab ${isActive} ${isPlayingPattern}">${i + 1}</div>`);
            
-            // Left Click to Switch
             $tab.on('click', function(e) {
                 if(e.button === 0) switchToPattern(i);
             });
            
-            // Right Click to Start Drag
             $tab.on('mousedown', function(e) {
                 if(e.button === 2) {
                     draggingPatternIdx = i;
@@ -507,20 +552,17 @@
                 }
             });
            
-            // Mouse Enter to Swap (if dragging)
             $tab.on('mouseenter', function(e) {
                 if (draggingPatternIdx !== null && draggingPatternIdx !== i) {
-                    // Swap data
                     const temp = patterns[draggingPatternIdx];
                     patterns[draggingPatternIdx] = patterns[i];
                     patterns[i] = temp;
                    
-                    // Update indices
                     if (activePatternIndex === draggingPatternIdx) activePatternIndex = i;
                     else if (activePatternIndex === i) activePatternIndex = draggingPatternIdx;
                    
-                    draggingPatternIdx = i; // Update current drag index
-                    updatePatternTabs(); // Re-render
+                    draggingPatternIdx = i;
+                    updatePatternTabs(); 
                 }
             });
            
@@ -528,7 +570,6 @@
         });
       }
      
-      // Global mouseup to clear pattern drag state
       $(window).on('mouseup', function() {
          draggingPatternIdx = null;
          draggingNote = null;
@@ -561,22 +602,16 @@
           for(var i=0; i < nodes.length; i++) {
               var val = 0;
               try {
-                  // Validate ID is a number to prevent "Cannot read properties of undefined" inside library
                   if(isNaN(nodes[i])) throw "Invalid Node ID";
-                 
-                  // Use nodeMgrInterface to access parameters robustly
+                  if(nodes[i] === -1) throw "Node ID not found (-1)";
                   var raw = instance_CardboardSynth.nodeMgrInterface.getPublicParameterData(nodes[i]);
-                 
-                  // GSN library often returns arrays (Float32Array) for signal nodes
                   if(raw !== undefined && raw !== null) {
                       if(raw.length !== undefined && raw.length > 0) val = raw[0];
                       else val = raw;
                   } else {
-                      // Fallback if read returns null
                       if(presets[presetSelected]) val = presets[presetSelected][i];
                   }
               } catch(e) {
-                  // Graceful fallback to prevent crash
                   if(presets[presetSelected]) val = presets[presetSelected][i];
               }
               currentParams.push(val);
@@ -597,14 +632,11 @@
           try {
             const params = JSON.parse(e.target.result);
             if(Array.isArray(params) && params.length === nodes.length) {
-                // Apply loaded parameters
                 setCurrent(params);
-                // Update Dropdown UI to show custom file
                 var select = document.getElementById("sound-select");
                 var opt = document.createElement("option");
                 opt.text = "Loaded: " + file.name;
                 opt.value = "custom";
-                // Add to presets just in case, or just set visually
                 select.appendChild(opt);
                 select.value = "custom";
                 alert("Synth Settings Loaded!");
@@ -639,7 +671,6 @@
             const project = JSON.parse(e.target.result);
             patterns = project.patterns;
             
-            // Backwards compatibility loop for previous saves
             patterns.forEach(p => {
                 if (!p.length) p.length = 16;
                 drumTracks.forEach(t => {
@@ -666,12 +697,12 @@
 
       // Sequencer State
       var isPlaying = false;
-      var isPatternPlay = false; // Distinguish between song mode and pattern mode
+      var isPatternPlay = false; 
       var bpm = 120;
       var currentStep = 0;
       var stepTimer;
       var dragStart = null;
-      var expectedTime = 0; // Drift correction anchor
+      var expectedTime = 0; 
 
       const notesArr = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
       const gridNotes = [];
@@ -707,14 +738,10 @@
       async function initDrumAudio() {
         if (!drumAudioContext) {
           drumAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-         
-          // Setup Recording Bus & ScriptProcessor
           drumRecordingBus = drumAudioContext.createGain();
-          // Create a ScriptProcessorNode with a bufferSize of 4096 and 2 input channels
           drumRecorderNode = drumAudioContext.createScriptProcessor(4096, 2, 2);
           drumRecorderNode.onaudioprocess = processDrumAudio;
 
-          // Connect Bus -> Recorder -> Destination (to keep the clock running)
           drumRecordingBus.connect(drumRecorderNode);
           drumRecorderNode.connect(drumAudioContext.destination);
         }
@@ -743,21 +770,15 @@
         source.playbackRate.value = $(`#pitch-${trackId}`).val() / 50;
        
         source.connect(gainNode);
-       
-        // Connect to Speakers
         gainNode.connect(drumAudioContext.destination);
-       
-        // Connect to Recording Bus if it exists
         if(drumRecordingBus) {
            gainNode.connect(drumRecordingBus);
         }
-       
         source.start(0);
       }
 
       // --- RECORDING LOGIC ---
       function processDrumAudio(e) {
-        // We silence the output of this node to prevent feedback/doubling loop
         var outputBuffer = e.outputBuffer;
         for (var channel = 0; channel < outputBuffer.numberOfChannels; channel++) {
           var outData = outputBuffer.getChannelData(channel);
@@ -770,7 +791,6 @@
         var left = inputBuffer.getChannelData(0);
         var right = inputBuffer.getChannelData(1);
        
-        // We clone the buffers because the system reuses them
         drumRecordBuffers.push([new Float32Array(left), new Float32Array(right)]);
         drumRecLength += left.length;
       }
@@ -779,10 +799,8 @@
         resumeAudio();
         if (!isDrumRecording) {
             isDrumRecording = true;
-            // Clear previous recording buffers
             drumRecordBuffers = [];
             drumRecLength = 0;
-           
             $('#drum-record-btn').text('Stop Rec').css('background-color', '#ffeb3b').css('color', '#000');
         } else {
             isDrumRecording = false;
@@ -793,19 +811,12 @@
 
       function exportDrumWav() {
         if (drumRecLength === 0) return;
-
-        // 1. Flatten the buffers
         var leftBuffer = mergeBuffers(drumRecordBuffers, drumRecLength, 0);
         var rightBuffer = mergeBuffers(drumRecordBuffers, drumRecLength, 1);
-       
-        // 2. Interleave channels
         var interleaved = interleave(leftBuffer, rightBuffer);
-       
-        // 3. Encode to WAV (16-bit PCM)
         var dataview = encodeWAV(interleaved, drumAudioContext.sampleRate);
         var blob = new Blob([dataview], { type: 'audio/wav' });
 
-        // 4. Download
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -813,7 +824,6 @@
         a.click();
       }
 
-      // --- WAV HELPERS ---
       function mergeBuffers(recBuffers, recLength, channel) {
         var result = new Float32Array(recLength);
         var offset = 0;
@@ -840,36 +850,20 @@
       function encodeWAV(samples, sampleRate) {
         var buffer = new ArrayBuffer(44 + samples.length * 2);
         var view = new DataView(buffer);
-
-        /* RIFF identifier */
         writeString(view, 0, 'RIFF');
-        /* RIFF chunk length */
         view.setUint32(4, 36 + samples.length * 2, true);
-        /* RIFF type */
         writeString(view, 8, 'WAVE');
-        /* format chunk identifier */
         writeString(view, 12, 'fmt ');
-        /* format chunk length */
         view.setUint32(16, 16, true);
-        /* sample format (raw) */
         view.setUint16(20, 1, true);
-        /* channel count */
         view.setUint16(22, 2, true);
-        /* sample rate */
         view.setUint32(24, sampleRate, true);
-        /* byte rate (sample rate * block align) */
         view.setUint32(28, sampleRate * 4, true);
-        /* block align (channel count * bytes per sample) */
         view.setUint16(32, 4, true);
-        /* bits per sample */
         view.setUint16(34, 16, true);
-        /* data chunk identifier */
         writeString(view, 36, 'data');
-        /* data chunk length */
         view.setUint32(40, samples.length * 2, true);
-
         floatTo16BitPCM(view, 44, samples);
-
         return view;
       }
 
@@ -896,23 +890,16 @@
 
       function renderGrids(length) {
         length = length || 16;
-        
-        // Save user's current drum settings so they are not wiped on re-render
         let drumStates = {};
         drumTracks.forEach(track => {
             let $sel = $(`.drum-row[data-track="${track.id}"] .drum-select`);
             let $vol = $(`#vol-${track.id}`);
             let $pitch = $(`#pitch-${track.id}`);
             if ($sel.length) {
-                drumStates[track.id] = {
-                    sample: $sel.val(),
-                    vol: $vol.val(),
-                    pitch: $pitch.val()
-                };
+                drumStates[track.id] = { sample: $sel.val(), vol: $vol.val(), pitch: $pitch.val() };
             }
         });
 
-        // 1. Synth Grid
         const $grid = $('#seq-grid');
         $grid.empty().append('<div class="playhead"></div>');
         $grid.css('grid-template-columns', `60px repeat(${length}, 1fr)`);
@@ -924,7 +911,6 @@
             }
         });
 
-        // 2. Drum Kit
         const $container = $('#drum-kit-rows');
         $container.empty();
         let headerHtml = `<div class="drum-row" style="margin-bottom: 2px; height: 15px; grid-template-columns: 120px repeat(${length}, 1fr) 100px;">
@@ -954,12 +940,10 @@
         footerHtml += `<div style="display: flex; justify-content: center;"><button class="button button-clear-drum" style="padding: 2px 10px; font-size: 11px; margin: 0;" onclick="clearDrums()">Clear</button></div></div>`;
         $container.append(footerHtml);
 
-        // Preserve drum recording UI state if recording 
         if (isDrumRecording) {
             $('#drum-record-btn').text('Stop Rec').css('background-color', '#ffeb3b').css('color', '#000');
         }
 
-        // Restore drum states
         if (Object.keys(drumStates).length > 0) {
             drumTracks.forEach(track => {
                 let state = drumStates[track.id];
@@ -976,102 +960,6 @@
         drumSequence[trackId][step] = !drumSequence[trackId][step];
         $(el).toggleClass('active', drumSequence[trackId][step]);
         if(drumSequence[trackId][step]) playDrum(trackId);
-      }
-
-      var isCalibrating = false;
-      var calibrationData = {};
-      var calibrationQueue = [];
-      var currentCalibrationNoteIndex = 0;
-
-      function startCalibration() {
-        if (isCalibrating) return;
-        isCalibrating = true;
-        calibrationData = {};
-        calibrationQueue = [];
-        for (let m = 36; m <= 72; m++) calibrationQueue.push(m);
-        currentCalibrationNoteIndex = 0;
-        $('#calibration-banner').show();
-        updateCalibrationMessage();
-        setTimeout(() => document.addEventListener('mousedown', handleCalibrationClick, true), 250);
-      }
-
-      function updateCalibrationMessage() {
-        if (currentCalibrationNoteIndex < calibrationQueue.length) {
-          const midi = calibrationQueue[currentCalibrationNoteIndex];
-          const name = notesArr[midi % 12] + (Math.floor(midi / 12) - 1);
-          $('#cal-note-display').text(name);
-          $('#cal-progress').text(`(${currentCalibrationNoteIndex + 1} / ${calibrationQueue.length})`);
-        } else finishCalibration();
-      }
-
-      function handleCalibrationClick(e) {
-        if (!isCalibrating || !e.isTrusted) return;
-        if (e.target.closest('#cancel-cal-btn')) return;
-        const midi = calibrationQueue[currentCalibrationNoteIndex];
-        calibrationData[midi] = { x: e.clientX, y: e.clientY };
-        rawTrigger(midi, 100, 150);
-        currentCalibrationNoteIndex++;
-        if (currentCalibrationNoteIndex >= calibrationQueue.length) finishCalibration();
-        else updateCalibrationMessage();
-        e.preventDefault(); e.stopPropagation();
-      }
-
-      function cancelCalibration() {
-        isCalibrating = false;
-        document.removeEventListener('mousedown', handleCalibrationClick, true);
-        $('#calibration-banner').hide();
-      }
-
-      function finishCalibration() {
-        isCalibrating = false;
-        document.removeEventListener('mousedown', handleCalibrationClick, true);
-        $('#calibration-banner').hide();
-        localStorage.setItem('synth_keyboard_calibration', JSON.stringify(calibrationData));
-        saveCalibrationToFile();
-        alert("Calibration complete!");
-      }
-
-      function saveCalibrationToFile() {
-        const blob = new Blob([JSON.stringify(calibrationData)], {type: "application/json"});
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.download = "keyboard_calibration.json";
-        link.href = url;
-        link.click();
-      }
-
-      function loadCalibration(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          try {
-            calibrationData = JSON.parse(e.target.result);
-            localStorage.setItem('synth_keyboard_calibration', JSON.stringify(calibrationData));
-            alert("Calibration Loaded!");
-          } catch(err) { alert("Error reading file"); }
-        };
-        reader.readAsText(file);
-      }
-     
-      function loadStoredCalibration() {
-        const stored = localStorage.getItem('synth_keyboard_calibration');
-        if (stored) {
-            try {
-                calibrationData = JSON.parse(stored);
-                console.log("Restored keyboard calibration from storage.");
-            } catch (e) {
-                console.error("Failed to restore calibration", e);
-            }
-        }
-      }
-
-      function simulateMouseClick(x, y, type) {
-        const element = document.elementFromPoint(x, y);
-        if (element) {
-          const eventOptions = { view: window, bubbles: true, cancelable: true, clientX: x, clientY: y, composed: true };
-          element.dispatchEvent(new MouseEvent(type, eventOptions));
-        }
       }
 
       function gsn_load() {
@@ -1095,13 +983,14 @@
         setSound();
         initDrumAudio();
         initPatternSystem();
-        loadStoredCalibration();
       }
 
       function setCurrent(arr) {
         if (!instance_CardboardSynth || !instance_CardboardSynth.runMgr) return;
         for(var i=0; i<nodes.length; i++) {
-            try { instance_CardboardSynth.runMgr.setPublicParameterData(nodes[i], arr[i]); } catch(e) {}
+            if (nodes[i] !== -1 && !isNaN(nodes[i])) {
+                try { instance_CardboardSynth.runMgr.setPublicParameterData(nodes[i], arr[i]); } catch(e) {}
+            }
         }
         instance_CardboardSynth.ui.update();
       }
@@ -1153,9 +1042,6 @@
         var ns = instance_CardboardSynth.runMgr.getAnyNodeIdByName("RecordLeft");
         var signal = instance_CardboardSynth.nodeMgrInterface.getPublicParameterData(parseInt(ns));
        
-        // --- WORKAROUND: PITCH MODIFIER ---
-        // Shifting pitch up by 1 semitone (factor of 2^(1/12))
-        // We use linear interpolation to resample the signal
         const pitchRatio = Math.pow(2, 3 / 24);
         const newLength = Math.floor(signal.length / pitchRatio);
         const resampledSignal = new Float32Array(newLength);
@@ -1165,14 +1051,12 @@
           const lowIdx = Math.floor(sourceIdx);
           const highIdx = Math.min(lowIdx + 1, signal.length - 1);
           const weight = sourceIdx - lowIdx;
-          // Linear interpolation
           resampledSignal[i] = signal[lowIdx] * (1 - weight) + signal[highIdx] * weight;
         }
 
         var audioExport = new gsn.AudioExport();
         var currentSampleRate = (typeof gsn !== 'undefined' && gsn.context) ? gsn.context.sampleRate : 44100;
        
-        // Export the resampled signal instead of the original signal
         var wavArrayBuffer = audioExport.convertToWAVFloat32(resampledSignal, currentSampleRate);
         var blob = new Blob([wavArrayBuffer], {type: "octet/stream"});
         var downloadLink = document.createElement("a");
@@ -1182,21 +1066,55 @@
         document.getElementById("myModalRecord").style.display = "none";
       }
 
+      // --- VIRTUAL SEQUENCER: ROBUST TRIGGER LOGIC ---
       function rawTrigger(midi, vel, dur) {
-        if (instance_CardboardSynth && instance_CardboardSynth.runMgr && typeof instance_CardboardSynth.runMgr.midiEvent === 'function') {
-          try {
-            instance_CardboardSynth.runMgr.midiEvent(0, 144, midi, vel);
-            setTimeout(() => { if(instance_CardboardSynth.runMgr.midiEvent) instance_CardboardSynth.runMgr.midiEvent(0, 128, midi, 0); }, dur);
-          } catch(e) {}
+        try {
+            // First, attempt to trigger via our Virtual Web MIDI port to bypass visual latency
+            if (window.virtualMIDIInput && typeof window.virtualMIDIInput.onmidimessage === 'function') {
+                
+                // 1. Dispatch NOTE ON
+                const noteOnData = new Uint8Array([0x90, midi, vel]); // 0x90 = 144 = Note On Ch 1
+                const mockNoteOnEvent = {
+                    data: noteOnData,
+                    target: window.virtualMIDIInput,
+                    currentTarget: window.virtualMIDIInput,
+                    srcElement: window.virtualMIDIInput,
+                    port: window.virtualMIDIInput
+                };
+                window.virtualMIDIInput.onmidimessage(mockNoteOnEvent);
+
+                // 2. Dispatch NOTE OFF after duration
+                setTimeout(() => {
+                    try {
+                        const noteOffData = new Uint8Array([0x80, midi, 0]); // 0x80 = 128 = Note Off Ch 1
+                        const mockNoteOffEvent = {
+                            data: noteOffData,
+                            target: window.virtualMIDIInput,
+                            currentTarget: window.virtualMIDIInput,
+                            srcElement: window.virtualMIDIInput,
+                            port: window.virtualMIDIInput
+                        };
+                        window.virtualMIDIInput.onmidimessage(mockNoteOffEvent);
+                    } catch (innerError) {
+                        console.warn("Virtual MIDI: Handled internal synth error on Note Off:", innerError);
+                    }
+                }, dur);
+
+            } else {
+                // Fallback approach if the interceptor failed to load or connect
+                if (instance_CardboardSynth && instance_CardboardSynth.runMgr && typeof instance_CardboardSynth.runMgr.midiEvent === 'function') {
+                    instance_CardboardSynth.runMgr.midiEvent(0, 144, midi, vel);
+                    setTimeout(() => { if(instance_CardboardSynth.runMgr.midiEvent) instance_CardboardSynth.runMgr.midiEvent(0, 128, midi, 0); }, dur);
+                }
+            }
+        } catch (error) {
+            console.warn("Virtual MIDI: Handled internal synth error on Note On:", error);
         }
       }
 
       function triggerNote(midi, durationSec) {
-        if (calibrationData && calibrationData[midi]) {
-          const pos = calibrationData[midi];
-          simulateMouseClick(pos.x, pos.y, 'mousedown');
-          setTimeout(() => simulateMouseClick(pos.x, pos.y, 'mouseup'), durationSec * 1000);
-        } else rawTrigger(midi, 100, durationSec * 1000);
+        // We'll prioritize the robust MIDI rawTrigger instead of visual simulated clicks
+        rawTrigger(midi, 100, durationSec * 1000);
       }
 
       function resizeHelper() {
@@ -1219,7 +1137,6 @@
       }
 
       function initSequencerEvents() {
-        // Prevent context menu on grid
         $('#seq-grid').on('contextmenu', function(e) {
              e.preventDefault();
              return false;
@@ -1229,7 +1146,6 @@
           resumeAudio();
           const step = parseInt($(this).data('step')), note = parseInt($(this).data('note'));
 
-          // Left Click (0) - Toggle Note
           if(e.button === 0) {
             if (sequence[step] && sequence[step][note]) {
               delete sequence[step][note];
@@ -1241,20 +1157,15 @@
               const $noteEl = $('<div class="active-note" style="width: calc(100% - 4px)"></div>');
               $(this).append($noteEl);
               dragStart = { originStep: step, note: note, $el: $noteEl };
-              if ($('#sync-keyboard').is(':checked')) triggerNote(note, 0.1);
+              triggerNote(note, 0.1);
             }
           }
-          // Right Click (2) - Move Note
           else if(e.button === 2) {
              if (sequence[step] && sequence[step][note]) {
-                 // Start dragging existing note
                  const dur = sequence[step][note];
-                 // Remove from sequence temporarily (visual only handled by drag)
                  delete sequence[step][note];
                  $(this).find('.active-note').remove();
                  
-                 // Create temp floating visual or just re-add at new position during mousemove?
-                 // Let's re-add it at current pos and set drag state
                  if (!sequence[step]) sequence[step] = {};
                  sequence[step][note] = dur;
                  const $noteEl = $('<div class="active-note" style="width: calc(100% - 4px)"></div>');
@@ -1271,7 +1182,6 @@
         });
 
         $(window).on('mousemove', function(e) {
-            // Resize logic (Left Click Drag)
             if (dragStart && e.buttons === 1) {
                 const target = document.elementFromPoint(e.clientX, e.clientY);
                 const $cell = $(target).closest('.cell');
@@ -1285,7 +1195,6 @@
                 }
             }
            
-            // Move Logic (Right Click Drag)
             if (draggingNote && e.buttons === 2) {
                 const target = document.elementFromPoint(e.clientX, e.clientY);
                 const $cell = $(target).closest('.cell');
@@ -1294,26 +1203,22 @@
                     const newStep = parseInt($cell.data('step'));
                     const newNote = parseInt($cell.data('note'));
                    
-                    // Only update if changed cell
                     if (newStep !== draggingNote.step || newNote !== draggingNote.note) {
-                        // Remove old
                         if(sequence[draggingNote.step] && sequence[draggingNote.step][draggingNote.note]) {
                             delete sequence[draggingNote.step][draggingNote.note];
                             $(`.cell[data-step="${draggingNote.step}"][data-note="${draggingNote.note}"] .active-note`).remove();
                         }
                        
-                        // Set new
                         draggingNote.step = newStep;
                         draggingNote.note = newNote;
                        
                         if (!sequence[newStep]) sequence[newStep] = {};
                         sequence[newStep][newNote] = draggingNote.duration;
                        
-                        // Render new
                         const $newCell = $(`.cell[data-step="${newStep}"][data-note="${newNote}"]`);
                         const $noteEl = $(`<div class="active-note" style="width: calc(${draggingNote.duration * 100}% - 4px)"></div>`);
                         $newCell.append($noteEl);
-                        draggingNote.$el = $noteEl; // Update ref
+                        draggingNote.$el = $noteEl; 
                     }
                 }
             }
@@ -1350,10 +1255,8 @@
         if (currentStep >= patternLength) {
           currentStep = 0;
           if (!isPatternPlay) {
-            // Normal Song Mode: Loop through all patterns
             playPatternIndex = (playPatternIndex + 1) % patterns.length;
           } else {
-            // Pattern Mode: Loop the active pattern (update to whatever is currently selected)
             playPatternIndex = activePatternIndex;
           }
           updatePatternTabs();
@@ -1381,11 +1284,9 @@
       function togglePlay() {
         resumeAudio();
         if (isPlaying && !isPatternPlay) {
-          // Already playing song, so stop
           stopTransport();
         } else {
-          // Start Song Mode
-          stopTransport(); // Clears any existing playback/pattern mode
+          stopTransport(); 
           isPlaying = true;
           isPatternPlay = false;
           currentStep = 0;
@@ -1400,11 +1301,9 @@
       function togglePlayPattern() {
         resumeAudio();
         if (isPlaying && isPatternPlay) {
-          // Already playing pattern, so stop
           stopTransport();
         } else {
-          // Start Pattern Mode
-          stopTransport(); // Clears any existing playback/song mode
+          stopTransport(); 
           isPlaying = true;
           isPatternPlay = true;
           currentStep = 0;
@@ -1417,10 +1316,14 @@
       }
     </script>
   </head>
-  <body onload='gsn_load();'>
-    <div id="calibration-banner">
-      CALIBRATION: Click key <span id="cal-note-display">C2</span> <span id="cal-progress"></span>
-      <button id="cancel-cal-btn" class="button button-cyber" onclick="cancelCalibration()" style="margin-left: 20px;">Cancel</button>
+  
+  <!-- Removed body onload handler. It's now driven by the Start Overlay -->
+  <body>
+    <!-- START OVERLAY -->
+    <div id="start-overlay">
+      <div class="overlay-title">CARDBOARD SYNTH SEQUENCER</div>
+      <button class="button button-cyber" style="font-size: 24px; padding: 15px 40px; letter-spacing: 2px;" onclick="startApp()">CLICK TO START</button>
+      <div style="color: #666; font-family: monospace; margin-top: 20px; font-size: 14px;">(Ensures audio initialization)</div>
     </div>
 
     <div class="footer-sign">By The Fire Penguins</div>
@@ -1465,12 +1368,6 @@
                 <div style="font-size: 9px; color: #555; margin-top: 8px; font-family: monospace;">Left mouse click to edit patterns. Right mouse click to move them.</div>
             </div>
           </div>
-
-          <div class="myBlock">
-            <button class="button button-cyber" onClick='startCalibration();'>Define Keyboard Position</button>
-            <button class="button button-cyber" onClick='$("#load-input").click()'>Load Keyboard Position</button>
-            <input type="file" id="load-input" class="hidden" accept=".json" onchange="loadCalibration(event)">
-          </div>
         </div>
       </div>
 
@@ -1482,10 +1379,6 @@
             <button class="button button-cyber" onclick="sequence = {}; patterns[activePatternIndex].sequence = {}; $('.active-note').remove();">Clear Synth</button>
             <span style="color:#00d2ff; font-family:monospace;">BPM:</span>
             <input type="number" class="bpm-input" value="120" onchange="bpm=this.value">
-            <div class="sync-container">
-              <input type="checkbox" id="sync-keyboard" checked>
-              <label for="sync-keyboard">Sync Keyboard</label>
-            </div>
           </div>
           <div id="grid-scroll-area">
             <div id="seq-grid" class="seq-grid"></div>
@@ -1493,19 +1386,17 @@
         </div>
 
         <div id="drum-container">
-          <div id="drum-kit-rows">
-            </div>
+          <div id="drum-kit-rows"></div>
         </div>
       </div>
     </div>
 
     <div id="myModalRecord" class="modal">
       <div class="modal-content">
-        <span class="close" onClick='$(\"#myModalRecord\").hide()'>&times;</span>
+        <span class="close" onClick='$("#myModalRecord").hide()'>&times;</span>
         <p>Download your recording as a WAV file.</p>
         <button class="button button-cyber" onClick='recordReadout();'>Download</button>
       </div>
     </div>
   </body>
 </html>
-
