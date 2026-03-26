@@ -189,7 +189,7 @@
         user-select: none;
       }
 
-      .seq-controls { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
+      .seq-controls { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }
 
       #grid-scroll-area {
         overflow-y: auto;
@@ -274,6 +274,17 @@
         border-radius: 4px;
         text-align: center;
         font-weight: bold;
+      }
+
+      .octave-buttons {
+        display: flex;
+        gap: 5px;
+      }
+
+      .octave-buttons .button-cyber {
+        padding: 6px 10px;
+        font-size: 12px;
+        margin: 0;
       }
 
       .drum-row {
@@ -432,6 +443,9 @@
       var presetSelected = 0;
       var instance_CardboardSynth;
       var randomCounter = 0;
+
+      // --- OCTAVE TRANSPOSE STATE ---
+      var currentOctaveOffset = 0;
 
       // --- PATTERN STATE MANAGEMENT ---
       var patterns = [];
@@ -594,6 +608,45 @@
             });
         });
       }
+
+      // --- OCTAVE TRANSPOSE FUNCTIONS ---
+      function transposeSequenceUp() {
+        if (currentOctaveOffset >= 6) {
+          alert("Cannot transpose higher - reached maximum octave range (C8)");
+          return;
+        }
+        const newSequence = {};
+        Object.keys(sequence).forEach(step => {
+            newSequence[step] = {};
+            Object.keys(sequence[step]).forEach(midi => {
+                const newMidi = parseInt(midi) + 12;
+                newSequence[step][newMidi] = sequence[step][midi];
+            });
+        });
+        sequence = newSequence;
+        patterns[activePatternIndex].sequence = sequence;
+        currentOctaveOffset++;
+        refreshSequencerUI();
+      }
+
+      function transposeSequenceDown() {
+        if (currentOctaveOffset <= -2) {
+          alert("Cannot transpose lower - reached minimum octave range (C2)");
+          return;
+        }
+        const newSequence = {};
+        Object.keys(sequence).forEach(step => {
+            newSequence[step] = {};
+            Object.keys(sequence[step]).forEach(midi => {
+                const newMidi = parseInt(midi) - 12;
+                newSequence[step][newMidi] = sequence[step][midi];
+            });
+        });
+        sequence = newSequence;
+        patterns[activePatternIndex].sequence = sequence;
+        currentOctaveOffset--;
+        refreshSequencerUI();
+      }
      
       // --- SYNTH SAVE / LOAD ---
       function saveSynthSettings() {
@@ -706,11 +759,11 @@
 
       const notesArr = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
       const gridNotes = [];
-      // EXTENDED NOTE RANGE: C2 to C7 (72 semitones)
-      for (let oct = 7; oct >= 2; oct--) {
+      // EXTENDED NOTE RANGE: C2 to C8 (84 semitones)
+      for (let oct = 8; oct >= 2; oct--) {
         for (let i = 11; i >= 0; i--) {
             const midi = (oct + 1) * 12 + i;
-            if (midi > 108) continue;  // C7 = MIDI 108
+            if (midi > 120) continue;  // C8 = MIDI 120
             if (midi < 36) continue;   // C2 = MIDI 36
             gridNotes.push({ name: notesArr[i] + oct, midi: midi });
         }
@@ -1380,6 +1433,10 @@
             <button class="button button-cyber" onclick="sequence = {}; patterns[activePatternIndex].sequence = {}; $('.active-note').remove();">Clear Synth</button>
             <span style="color:#00d2ff; font-family:monospace;">BPM:</span>
             <input type="number" class="bpm-input" value="120" onchange="bpm=this.value">
+            <div class="octave-buttons">
+              <button class="button button-cyber" onclick="transposeSequenceDown()">−Oct</button>
+              <button class="button button-cyber" onclick="transposeSequenceUp()">+Oct</button>
+            </div>
           </div>
           <div id="grid-scroll-area">
             <div id="seq-grid" class="seq-grid"></div>
