@@ -444,9 +444,6 @@
       var instance_CardboardSynth;
       var randomCounter = 0;
 
-      // --- OCTAVE TRANSPOSE STATE ---
-      var currentOctaveOffset = 0;
-
       // --- PATTERN STATE MANAGEMENT ---
       var patterns = [];
       var activePatternIndex = 0;
@@ -610,41 +607,75 @@
       }
 
       // --- OCTAVE TRANSPOSE FUNCTIONS ---
+      // Helper function to get highest note in current pattern
+      function getHighestNote() {
+        let highest = 36; // C2 minimum
+        Object.keys(sequence).forEach(step => {
+            Object.keys(sequence[step]).forEach(midi => {
+                const midiNum = parseInt(midi);
+                if (midiNum > highest) highest = midiNum;
+            });
+        });
+        return highest;
+      }
+
+      // Helper function to get lowest note in current pattern
+      function getLowestNote() {
+        let lowest = 120; // C8 maximum
+        Object.keys(sequence).forEach(step => {
+            Object.keys(sequence[step]).forEach(midi => {
+                const midiNum = parseInt(midi);
+                if (midiNum < lowest) lowest = midiNum;
+            });
+        });
+        return lowest === 120 ? 36 : lowest; // Return 36 if no notes exist
+      }
+
       function transposeSequenceUp() {
-        if (currentOctaveOffset >= 6) {
-          alert("Cannot transpose higher - reached maximum octave range (C8)");
+        const highestNote = getHighestNote();
+        // Check if highest note + 12 would exceed C8 (120)
+        if (highestNote + 12 > 120) {
+          alert("Cannot transpose higher - some notes would exceed C8");
           return;
         }
+        
         const newSequence = {};
         Object.keys(sequence).forEach(step => {
             newSequence[step] = {};
             Object.keys(sequence[step]).forEach(midi => {
                 const newMidi = parseInt(midi) + 12;
-                newSequence[step][newMidi] = sequence[step][midi];
+                // Only keep notes that are within valid range (though we checked this above)
+                if (newMidi <= 120) {
+                    newSequence[step][newMidi] = sequence[step][midi];
+                }
             });
         });
         sequence = newSequence;
         patterns[activePatternIndex].sequence = sequence;
-        currentOctaveOffset++;
         refreshSequencerUI();
       }
 
       function transposeSequenceDown() {
-        if (currentOctaveOffset <= -2) {
-          alert("Cannot transpose lower - reached minimum octave range (C2)");
+        const lowestNote = getLowestNote();
+        // Check if lowest note - 12 would go below C2 (36)
+        if (lowestNote - 12 < 36) {
+          alert("Cannot transpose lower - some notes would go below C2");
           return;
         }
+        
         const newSequence = {};
         Object.keys(sequence).forEach(step => {
             newSequence[step] = {};
             Object.keys(sequence[step]).forEach(midi => {
                 const newMidi = parseInt(midi) - 12;
-                newSequence[step][newMidi] = sequence[step][midi];
+                // Only keep notes that are within valid range
+                if (newMidi >= 36) {
+                    newSequence[step][newMidi] = sequence[step][midi];
+                }
             });
         });
         sequence = newSequence;
         patterns[activePatternIndex].sequence = sequence;
-        currentOctaveOffset--;
         refreshSequencerUI();
       }
      
