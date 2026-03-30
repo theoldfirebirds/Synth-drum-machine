@@ -7,7 +7,10 @@
     <!-- Must run BEFORE the synth engine libraries are loaded -->
     <script>
       (function initWebMidiInterceptor() {
-        console.log("Initializing Virtual MIDI Interceptor...");
+        console.log("Initializing MIDI System...");
+        
+        // Store the MIDI input mode (will be set by user selection)
+        window.midiInputMode = 'virtual'; // default to virtual
         
         // 1. Create a Virtual MIDI Input object mimicking a real hardware input
         window.virtualMIDIInput = {
@@ -34,9 +37,23 @@
           sysexEnabled: false
         };
 
-        // 3. Override the browser's native requestMIDIAccess API
-        navigator.requestMIDIAccess = function() {
-          return Promise.resolve(mockMIDIAccess);
+        // 3. Store original requestMIDIAccess
+        const originalRequestMIDIAccess = navigator.requestMIDIAccess;
+
+        // 4. Override the browser's native requestMIDIAccess API conditionally
+        navigator.requestMIDIAccess = function(options) {
+          console.log("requestMIDIAccess called, mode:", window.midiInputMode);
+          
+          if (window.midiInputMode === 'virtual') {
+            // Return virtual MIDI
+            return Promise.resolve(mockMIDIAccess);
+          } else if (window.midiInputMode === 'real' && originalRequestMIDIAccess) {
+            // Use the real MIDI API
+            return originalRequestMIDIAccess.call(navigator, options);
+          } else {
+            // Fallback to virtual if real is not available
+            return Promise.resolve(mockMIDIAccess);
+          }
         };
       })();
     </script>
@@ -72,6 +89,63 @@
         text-shadow: 0 0 15px #00d2ff;
         margin-bottom: 30px;
         text-align: center;
+      }
+
+      /* MIDI Mode Selection */
+      .midi-mode-selector {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 15px;
+        margin-bottom: 30px;
+        padding: 20px;
+        border: 1px solid #00d2ff;
+        border-radius: 8px;
+        background: rgba(0, 210, 255, 0.05);
+        box-shadow: 0 0 10px rgba(0, 210, 255, 0.1);
+      }
+
+      .midi-mode-label {
+        color: #00d2ff;
+        font-family: monospace;
+        font-size: 14px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .midi-radio-group {
+        display: flex;
+        gap: 30px;
+        align-items: center;
+      }
+
+      .midi-radio-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+      }
+
+      .midi-radio-option input[type="radio"] {
+        cursor: pointer;
+        accent-color: #00d2ff;
+        width: 18px;
+        height: 18px;
+      }
+
+      .midi-radio-option label {
+        color: #ccc;
+        font-family: monospace;
+        font-size: 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .midi-radio-option input[type="radio"]:checked + label {
+        color: #00d2ff;
+        font-weight: bold;
+        text-shadow: 0 0 5px #00d2ff;
       }
 
       /* Main Layout Container */
@@ -407,6 +481,11 @@
     <script>
       // --- APP START OVERLAY LOGIC ---
       function startApp() {
+        // Store the selected MIDI mode
+        const midiMode = document.querySelector('input[name="midi-mode"]:checked').value;
+        window.midiInputMode = midiMode;
+        console.log("Selected MIDI mode:", window.midiInputMode);
+        
         // Fade out overlay
         $('#start-overlay').fadeOut(300);
         
@@ -1404,9 +1483,25 @@
   
   <!-- Removed body onload handler. It's now driven by the Start Overlay -->
   <body>
-    <!-- START OVERLAY -->
+    <!-- START OVERLAY WITH MIDI MODE SELECTOR -->
     <div id="start-overlay">
       <div class="overlay-title">CARDBOARD SYNTH SEQUENCER</div>
+      
+      <!-- MIDI Mode Selection -->
+      <div class="midi-mode-selector">
+        <div class="midi-mode-label">SELECT MIDI INPUT MODE:</div>
+        <div class="midi-radio-group">
+          <div class="midi-radio-option">
+            <input type="radio" id="midi-virtual" name="midi-mode" value="virtual" checked>
+            <label for="midi-virtual">Virtual MIDI (Sequencer)</label>
+          </div>
+          <div class="midi-radio-option">
+            <input type="radio" id="midi-real" name="midi-mode" value="real">
+            <label for="midi-real">Real MIDI Keyboard</label>
+          </div>
+        </div>
+      </div>
+      
       <button class="button button-cyber" style="font-size: 24px; padding: 15px 40px; letter-spacing: 2px;" onclick="startApp()">CLICK TO START</button>
       <div style="color: #666; font-family: monospace; margin-top: 20px; font-size: 14px;">(Ensures audio initialization)</div>
     </div>
